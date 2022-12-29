@@ -10,6 +10,7 @@
 mod parse;
 mod section;
 
+use std::convert::TryFrom;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -144,6 +145,9 @@ pub enum Tag {
     /// `{{/closing}}` section tag
     Closing,
 
+    /// Index based list traversal
+    Indexed(Indexed),
+
     /// `{{!comment}}` tag
     Comment,
 
@@ -152,6 +156,64 @@ pub enum Tag {
 
     /// Tailing html
     Tail,
+}
+
+/// Inclusive/Exclusive index based tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Indexed {
+    /// `{{#-index}}` opening tag for an exact index
+    Include(Index),
+    /// `{{^-index}}` opening tag for all other indexes
+    Exclude(Index),
+}
+impl Indexed {
+    /// Marks whether this index is truthy.
+    /// Returns true when this index is to be rendered.
+    #[inline]
+    pub fn is_truthy(&self, len: usize, index: usize) -> bool {
+        match self {
+            Indexed::Include(index_) => index_.nth(len) == index,
+            Indexed::Exclude(index_) => index_.nth(len) != index,
+        }
+    }
+}
+
+/// Index specification for an index based tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Index {
+    /// The first element of the list.
+    First,
+    /// The last element of the list.
+    Last,
+    /// The nth element of the list.
+    Nth(usize),
+}
+impl Index {
+    /// Get the index numeral value for a list of the given length.
+    pub fn nth(&self, len: usize) -> usize {
+        match self {
+            Index::First => 0,
+            Index::Last => len - 1,
+            Index::Nth(n) => *n,
+        }
+    }
+}
+impl TryFrom<&str> for Index {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(match value {
+            "first" => Self::First,
+            "last" => Self::Last,
+            maybe_number => Self::Nth(
+                maybe_number
+                    .parse()
+                    .map_err(|_| Error::IndexParse(maybe_number.to_string()))?,
+            ),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +253,14 @@ impl<'tpl> Block<'tpl> {
             hash: 0,
             tag,
             children: 0,
+        }
+    }
+    /// Get the index if this block refers to a section index.
+    #[inline]
+    pub(crate) fn index(&self) -> Option<&Indexed> {
+        match &self.tag {
+            Tag::Indexed(indexed) => Some(indexed),
+            _ => None,
         }
     }
 }
@@ -249,6 +319,17 @@ mod test {
                 Block::nameless("</div>", Tag::Tail),
             ]
         );
+    }
+
+    #[test]
+    fn blocks() {
+        let source = "{{#bob}}{{^-last}}{{{name}}}{{/-last}}{{#-last}}{{{name}}}{{/-last}}{{/bob}}";
+        let tpl = Template::new(source).unwrap();
+
+        println!("{}", source);
+        for block in tpl.blocks {
+            println!("{:?}", block);
+        }
     }
 
     #[test]

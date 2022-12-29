@@ -8,8 +8,8 @@
 // along with Ramhorns.  If not, see <http://www.gnu.org/licenses/>
 
 use crate::encoding::Encoder;
-use crate::template::{Section, Template};
-use crate::traits::{ContentSequence};
+use crate::template::{Indexed, Section, Template};
+use crate::traits::ContentSequence;
 
 use arrayvec::ArrayVec;
 use std::borrow::{Borrow, Cow, ToOwned};
@@ -52,11 +52,7 @@ pub trait Content {
 
     /// Render a section with self.
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -70,11 +66,7 @@ pub trait Content {
 
     /// Render a section with self.
     #[inline]
-    fn render_inverse<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_inverse<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -143,6 +135,22 @@ pub trait Content {
     ) -> Result<bool, E::Error>
     where
         C: ContentSequence,
+        E: Encoder,
+    {
+        Ok(false)
+    }
+
+    /// Render an index based section.
+    /// If successful, returns `true` if the index exists in this content, otherwise `false`.
+    #[inline]
+    fn render_index_section<'section, P, E>(
+        &self,
+        _indexed: &Indexed,
+        _section: Section<'section, P>,
+        _encoder: &mut E,
+    ) -> Result<bool, E::Error>
+    where
+        P: ContentSequence,
         E: Encoder,
     {
         Ok(false)
@@ -316,11 +324,7 @@ impl<T: Content> Content for Option<T> {
     }
 
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -366,11 +370,7 @@ impl<T: Content, U> Content for Result<T, U> {
     }
 
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -390,20 +390,117 @@ impl<T: Content> Content for Vec<T> {
     }
 
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
     {
-        for item in self.iter() {
-            item.render_section(section, encoder)?;
+        let length = self.len();
+        for (index, item) in self.iter().enumerate() {
+            IndexBasedRender {
+                length,
+                index,
+                item,
+            }
+            .render_section(section, encoder)?;
         }
 
         Ok(())
+    }
+}
+
+struct IndexBasedRender<'a, T> {
+    length: usize,
+    index: usize,
+    item: &'a T,
+}
+impl<T: Content> Content for IndexBasedRender<'_, T> {
+    #[inline]
+    fn is_truthy(&self) -> bool {
+        true
+    }
+
+    /// Render a section with self.
+    #[inline]
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
+    where
+        C: ContentSequence,
+        E: Encoder,
+    {
+        if self.is_truthy() {
+            section.with(self).render(encoder)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    fn render_index_section<'section, P, E>(
+        &self,
+        indexed: &Indexed,
+        section: Section<'section, P>,
+        encoder: &mut E,
+    ) -> Result<bool, E::Error>
+    where
+        P: ContentSequence,
+        E: Encoder,
+    {
+        if indexed.is_truthy(self.length, self.index) {
+            self.item.render_section(section, encoder)?;
+        }
+        Ok(true)
+    }
+
+    fn render_field_escaped<E>(
+        &self,
+        hash: u64,
+        name: &str,
+        encoder: &mut E,
+    ) -> Result<bool, E::Error>
+    where
+        E: Encoder,
+    {
+        self.item.render_field_escaped(hash, name, encoder)
+    }
+
+    fn render_field_unescaped<E>(
+        &self,
+        hash: u64,
+        name: &str,
+        encoder: &mut E,
+    ) -> Result<bool, E::Error>
+    where
+        E: Encoder,
+    {
+        self.item.render_field_unescaped(hash, name, encoder)
+    }
+
+    fn render_field_section<C, E>(
+        &self,
+        hash: u64,
+        name: &str,
+        section: Section<C>,
+        encoder: &mut E,
+    ) -> Result<bool, E::Error>
+    where
+        C: ContentSequence,
+        E: Encoder,
+    {
+        self.item.render_field_section(hash, name, section, encoder)
+    }
+
+    fn render_field_inverse<C, E>(
+        &self,
+        hash: u64,
+        name: &str,
+        section: Section<C>,
+        encoder: &mut E,
+    ) -> Result<bool, E::Error>
+    where
+        C: ContentSequence,
+        E: Encoder,
+    {
+        self.item.render_field_inverse(hash, name, section, encoder)
     }
 }
 
@@ -414,11 +511,7 @@ impl<T: Content> Content for [T] {
     }
 
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -438,11 +531,7 @@ impl<T: Content, const N: usize> Content for [T; N] {
     }
 
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -462,11 +551,7 @@ impl<T: Content, const N: usize> Content for ArrayVec<T, N> {
     }
 
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -491,11 +576,7 @@ where
 
     /// Render a section with self.
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -578,11 +659,7 @@ where
 
     /// Render a section with self.
     #[inline]
-    fn render_section<C, E>(
-        &self,
-        section: Section<C>,
-        encoder: &mut E,
-    ) -> Result<(), E::Error>
+    fn render_section<C, E>(&self, section: Section<C>, encoder: &mut E) -> Result<(), E::Error>
     where
         C: ContentSequence,
         E: Encoder,
@@ -752,6 +829,20 @@ macro_rules! impl_pointer_types {
                     E: Encoder,
                 {
                     self.deref().render_field_inverse(hash, name, section, encoder)
+                }
+
+                #[inline]
+                fn render_index_section<'section, P, E>(
+                    &self,
+                    indexed: &Indexed,
+                    section: Section<'section, P>,
+                    encoder: &mut E,
+                ) -> Result<bool, E::Error>
+                where
+                    P: ContentSequence,
+                    E: Encoder,
+                {
+                    self.deref().render_index_section(indexed, section, encoder)
                 }
             }
         )*

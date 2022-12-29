@@ -9,8 +9,10 @@
 
 use arrayvec::ArrayVec;
 use logos::Logos;
+use std::convert::TryFrom;
 
-use super::{hash_name, Block, Error, Tag, Template};
+use super::{hash_name, Block, Error, Indexed, Tag, Template};
+use crate::template::Index;
 use crate::Partials;
 
 #[derive(Logos)]
@@ -37,7 +39,7 @@ enum Opening {
     Err,
 }
 
-#[derive(Logos)]
+#[derive(Logos, Debug)]
 #[logos(extras = Braces)]
 enum Closing {
     #[token("}}", |lex| {
@@ -103,7 +105,6 @@ impl<'tpl> Template<'tpl> {
                 return Err(Error::UnclosedTag);
             }
             let mut name = closing.slice();
-                    
             match tag {
                 Tag::Escaped | Tag::Unescaped => {
                     loop {
@@ -112,7 +113,7 @@ impl<'tpl> Template<'tpl> {
                                 self.blocks.push(Block::new(html, name, Tag::Section));
                                 name = closing.slice();
                                 html = "";
-                            },
+                            }
                             Some(Closing::Match) => {
                                 self.blocks.push(Block::new(html, name, tag));
                                 break;
@@ -120,32 +121,39 @@ impl<'tpl> Template<'tpl> {
                             _ => return Err(Error::UnclosedTag),
                         }
                     }
-                    
+
                     let d = self.blocks.len() - tail_idx - 1;
                     for i in 0..d {
                         self.blocks[tail_idx + i].children = (d - i) as u32;
                     }
                 }
-                Tag::Section | Tag::Inverse => {
-                    loop {
-                        match closing.next() {
-                            Some(Closing::Ident) => {
-                                stack.try_push(self.blocks.len())?;
-                                self.blocks.push(Block::new(html, name, Tag::Section));
-                                name = closing.slice();
-                                html = "";
-                            },
-                            Some(Closing::Match) => {
-                                stack.try_push(self.blocks.len())?;
-                                self.blocks.push(Block::new(html, name, tag));
-                                break;
-                            }
-                            _ => return Err(Error::UnclosedTag),
+                Tag::Section | Tag::Inverse => loop {
+                    match closing.next() {
+                        Some(Closing::Ident) => {
+                            stack.try_push(self.blocks.len())?;
+                            self.blocks.push(Block::new(html, name, tag));
+                            name = closing.slice();
+                            html = "";
                         }
+                        Some(Closing::Match) => {
+                            stack.try_push(self.blocks.len())?;
+                            let tag = match name.strip_prefix("-") {
+                                Some(index) if tag == Tag::Section => {
+                                    Tag::Indexed(Indexed::Include(Index::try_from(index)?))
+                                }
+                                Some(index) => {
+                                    Tag::Indexed(Indexed::Exclude(Index::try_from(index)?))
+                                }
+                                None => tag,
+                            };
+                            self.blocks.push(Block::new(html, name, tag));
+                            break;
+                        }
+                        _ => return Err(Error::UnclosedTag),
                     }
-                }
+                },
                 Tag::Closing => {
-                    self.blocks.push(Block::nameless(html, Tag::Closing));
+                    self.blocks.push(Block::nameless(html, tag));
 
                     let mut pop_section = |name| {
                         let hash = hash_name(name);
@@ -161,13 +169,13 @@ impl<'tpl> Template<'tpl> {
                         }
                         Ok(())
                     };
-                    
+
                     pop_section(name)?;
                     loop {
                         match closing.next() {
                             Some(Closing::Ident) => {
                                 pop_section(closing.slice())?;
-                            },
+                            }
                             Some(Closing::Match) => break,
                             _ => return Err(Error::UnclosedTag),
                         }
@@ -175,10 +183,10 @@ impl<'tpl> Template<'tpl> {
                 }
                 Tag::Partial => {
                     match closing.next() {
-                        Some(Closing::Match) => {},
+                        Some(Closing::Match) => {}
                         _ => return Err(Error::UnclosedTag),
                     }
-                    
+
                     self.blocks.push(Block::nameless(html, tag));
                     let partial = partials.get_partial(name)?;
                     self.blocks.extend_from_slice(&partial.blocks);

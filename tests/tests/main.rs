@@ -799,3 +799,75 @@ fn illegal_partials() {
         panic!("Partials loaded out of the allowed directory");
     }
 }
+
+#[test]
+fn section_index() {
+    let source = "{{#bob}}{{#-0}}{{#-last}}{{{name}}}{{/-last}}{{/-0}}{{/bob}}";
+    let tpl = Template::new(source).unwrap();
+
+    #[derive(Content)]
+    struct Bob {
+        name: String,
+    }
+
+    #[derive(Content)]
+    struct Api {
+        bob: Vec<Vec<Bob>>,
+    }
+
+    let render = tpl.render(&Api {
+        bob: vec![
+            vec![
+                Bob {
+                    name: "first".to_string(),
+                },
+                Bob {
+                    name: "last".to_string(),
+                },
+            ],
+            vec![
+                Bob {
+                    name: "second first".to_string(),
+                },
+                Bob {
+                    name: "second last".to_string(),
+                },
+            ],
+        ],
+    });
+
+    assert_eq!(render, "last");
+}
+
+#[test]
+fn section_index_exclude() {
+    let source =
+        "{{#bob}}|{{{name}}}|{{^-last}}{{#-1}}Second{{/-1}}{{^-1}}{{{name}}}{{/-1}},{{/-last}}{{#-last}}{{{name}}}{{/-last}}{{/bob}}";
+    let tpl = Template::new(source).unwrap();
+
+    #[derive(Content)]
+    struct Bob {
+        name: String,
+    }
+
+    #[derive(Content)]
+    struct Api {
+        bob: Vec<Bob>,
+    }
+
+    let render = tpl.render(&Api {
+        bob: vec![
+            Bob {
+                name: "first".to_string(),
+            },
+            Bob {
+                name: "second".to_string(),
+            },
+            Bob {
+                name: "last".to_string(),
+            },
+        ],
+    });
+
+    assert_eq!(render, "|first|first,|second|Second,|last|last");
+}
